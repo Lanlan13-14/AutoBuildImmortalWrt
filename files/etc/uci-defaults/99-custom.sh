@@ -12,6 +12,19 @@ uci set "dhcp.@domain[-1].name=time.android.com"
 uci set "dhcp.@domain[-1].ip=203.107.6.88"
 
 
+echo "创建 /etc/opkg/customfeeds.conf 并添加自定义软件源"
+
+mkdir -p /home/build/immortalwrt/files/etc/opkg
+
+cat << EOF > /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
+# add your custom package feeds here
+src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki
+src/gz istore_compat https://istore.istoreos.com/repo/all/compat
+EOF
+
+echo "检查 customfeeds.conf 内容:"
+cat /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
+
 # 计算网卡数量
 count=0
 for iface in /sys/class/net/*; do
