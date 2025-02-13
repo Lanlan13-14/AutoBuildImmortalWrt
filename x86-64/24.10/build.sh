@@ -8,6 +8,19 @@ echo "Include Docker: $INCLUDE_DOCKER"
 echo "Create pppoe-settings"
 mkdir -p  /home/build/immortalwrt/files/etc/config
 
+echo "创建 /etc/opkg/customfeeds.conf 并添加自定义软件源"
+
+mkdir -p /home/build/immortalwrt/files/etc/opkg
+
+cat << EOF > /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
+# add your custom package feeds here
+src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki
+src/gz istore_compat https://istore.istoreos.com/repo/all/compat
+EOF
+
+echo "检查 customfeeds.conf 内容:"
+cat /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
+
 # 创建pppoe配置文件 yml传入环境变量ENABLE_PPPOE等 写入配置文件 供99-custom.sh读取
 cat << EOF > /home/build/immortalwrt/files/etc/config/pppoe-settings
 enable_pppoe=${ENABLE_PPPOE}
@@ -42,6 +55,7 @@ PACKAGES="$PACKAGES luci-i18n-ddns-go-zh-cn"
 PACKAGES="$PACKAGES luci-proto-wireguard"
 PACKAGES="$PACKAGES qrencode"
 PACKAGES="$PACKAGES kmod-tcp-bbr"
+PACKAGES="$PACKAGES luci-i18n-upnp-zh-cn"
 
 # 增加几个必备组件 方便用户安装iStore
 PACKAGES="$PACKAGES fdisk"
