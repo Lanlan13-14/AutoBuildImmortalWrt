@@ -8,6 +8,20 @@ echo "Include Docker: $INCLUDE_DOCKER"
 echo "Create pppoe-settings"
 mkdir -p  /home/build/immortalwrt/files/etc/config
 
+curl -s -L https://github.com/nikkinikki-org/OpenWrt-nikki/raw/refs/heads/main/feed.sh | ash
+
+# 安装istore
+echo >> feeds.conf.default
+echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+./scripts/feeds update istore
+./scripts/feeds install -d y -p istore luci-app-store
+
+# you can install from shell or `Software` menu in LuCI
+# for opkg
+opkg install nikki
+opkg install luci-app-nikki
+opkg install luci-i18n-nikki-zh-cn
+
 # 创建pppoe配置文件 yml传入环境变量ENABLE_PPPOE等 写入配置文件 供99-custom.sh读取
 cat << EOF > /home/build/immortalwrt/files/etc/config/pppoe-settings
 enable_pppoe=${ENABLE_PPPOE}
