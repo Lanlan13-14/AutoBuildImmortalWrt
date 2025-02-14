@@ -13,12 +13,6 @@ uci set "dhcp.@domain[-1].ip=203.107.6.88"
 
 curl -s -L https://github.com/nikkinikki-org/OpenWrt-nikki/raw/refs/heads/main/feed.sh | ash
 
-# 安装istore
-echo >> feeds.conf.default
-echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-./scripts/feeds update istore
-./scripts/feeds install -d y -p istore luci-app-store
-
 # 计算网卡数量
 count=0
 for iface in /sys/class/net/*; do
