@@ -16,7 +16,7 @@ on:
           - 'yes'
           - 'no'
       enable_pppoe:
-        description: "是否配置PPPoE拨号信息?"
+        description: "是否配置 PPPoE 拨号信息?"
         required: true
         default: 'no'
         type: choice
@@ -24,10 +24,10 @@ on:
           - 'yes'
           - 'no'
       pppoe_account:
-        description: "宽带账号 (若启用PPPoE)"
+        description: "宽带账号（若启用 PPPoE）"
         required: false
       pppoe_password:
-        description: "宽带密码 (若启用PPPoE)"
+        description: "宽带密码（若启用 PPPoE）"
         required: false
 
 jobs:
@@ -39,8 +39,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 2. 安装构建所需的依赖
-      - name: Install Dependencies
+      # 2. 安装构建所需依赖
+      - name: Install Required Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
@@ -54,7 +54,25 @@ jobs:
           tar -xf imagebuilder.tar.xz -C imagebuilder --strip-components=1
           rm imagebuilder.tar.xz
 
-      # 4. 设置环境变量
+      # 4. 检查可用的 Profile
+      - name: Check Available Profiles
+        run: |
+          cd imagebuilder
+          AVAILABLE_PROFILES=$(make info | grep -E '^Profile' | awk '{print $2}')
+          echo "Available Profiles: $AVAILABLE_PROFILES"
+          
+          if echo "$AVAILABLE_PROFILES" | grep -q "^generic$"; then
+            echo "Using Profile: generic"
+            echo "profile_name=generic" >> $GITHUB_ENV
+          elif echo "$AVAILABLE_PROFILES" | grep -q "^legacy$"; then
+            echo "Using Profile: legacy"
+            echo "profile_name=legacy" >> $GITHUB_ENV
+          else
+            echo "Error: Could not find a suitable Profile for x86-64!"
+            exit 1
+          fi
+
+      # 5. 设置环境变量
       - name: Set Environment Variables
         run: |
           echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
@@ -63,7 +81,7 @@ jobs:
           echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
           echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
 
-      # 5. 验证 PPPoE 输入是否正确
+      # 6. 验证 PPPoE 输入
       - name: Validate PPPoE Inputs
         run: |
           if [ "$enable_pppoe" = "yes" ] && { [ -z "$pppoe_account" ] || [ -z "$pppoe_password" ]; }; then
@@ -71,7 +89,7 @@ jobs:
             exit 1
           fi
 
-      # 6. 创建 PPPoE 配置文件
+      # 7. 创建 PPPoE 配置文件
       - name: Create PPPoE Config File
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
@@ -81,7 +99,7 @@ jobs:
           pppoe_password=$pppoe_password
           EOF
 
-      # 7. 下载额外的 IPK 软件包
+      # 8. 下载额外 IPK 包
       - name: Download IPK Packages
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/packages
@@ -90,7 +108,7 @@ jobs:
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
 
-      # 8. 添加 iStore 源
+      # 9. 添加 iStore 源
       - name: Add iStore Feed
         run: |
           echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
@@ -98,7 +116,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 9. 设置默认主题为 Argon
+      # 10. 设置默认主题为 Argon
       - name: Set Default Theme to Argon
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
@@ -107,7 +125,7 @@ jobs:
               option mediaurlbase '/luci-static/argon'
           EOF
 
-      # 10. 编译 ImmortalWrt 固件
+      # 11. 构建固件
       - name: Build ImmortalWrt-x86-64
         run: |
           cd imagebuilder
@@ -126,14 +144,14 @@ jobs:
             PACKAGES="$PACKAGES luci-i18n-dockerman-zh-cn"
           fi
 
-          make image PROFILE="x86-64" PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files" ROOTFS_PARTSIZE=$profile
+          make image PROFILE="$profile_name" PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files" ROOTFS_PARTSIZE=$profile
 
           if [ $? -ne 0 ]; then
             echo "Error: Build failed!"
             exit 1
           fi
 
-      # 11. 计算固件的 SHA-256 哈希值
+      # 12. 生成固件哈希校验值
       - name: Generate Firmware SHA-256
         run: |
           OUTPUT=$(find $GITHUB_WORKSPACE/imagebuilder/bin/targets/x86/64/ -name "*squashfs-combined-efi.img.gz" | head -n 1)
@@ -145,12 +163,10 @@ jobs:
           sha256sum "$GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz" > $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
           sha256sum -c $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
 
-      # 12. 上传固件作为 GitHub Release 资产
-      - name: Upload Firmware to Release
-        uses: softprops/action-gh-release@v2.2.1
+      # 13. 上传固件和校验文件
+      - name: Upload Firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: Autobuild-x86-64
-          body_path: $GITHUB_WORKSPACE/info.md
           files: |
             $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
             $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
