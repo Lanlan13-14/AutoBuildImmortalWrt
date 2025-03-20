@@ -1,4 +1,4 @@
-name: Build ImmortalWrt-x86-64 Beta
+name: Build ImmortalWrt Firmware
 
 on:
   workflow_dispatch:
@@ -8,8 +8,7 @@ on:
         required: true
         default: '1024'
       include_docker:
-        description: |
-          是否编译 Docker 插件
+        description: '是否编译 Docker 插件'
         required: true
         default: 'yes'
         type: choice
@@ -17,18 +16,18 @@ on:
           - 'yes'
           - 'no'
       enable_pppoe:
-        description: "是否配置PPPoE拨号信息?"
+        description: "是否配置 PPPoE 拨号信息?"
         required: true
         default: 'no'
         type: choice
         options:
-        - 'yes'
-        - 'no'
+          - 'yes'
+          - 'no'
       pppoe_account:
-        description: "宽带账号 (若启用PPPoE)"
+        description: "宽带账号（若启用 PPPoE）"
         required: false
       pppoe_password:
-        description: "宽带密码 (若启用PPPoE)"
+        description: "宽带密码（若启用 PPPoE）"
         required: false
 
 jobs:
@@ -37,58 +36,81 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
-      
-      - name: Install Dependencies
+        uses: actions/checkout@v4
+
+      - name: Install Required Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
+          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
+            zlib1g-dev gawk gettext unzip file libssl-dev wget git python3 \
+            curl jq
+
+      - name: Download OpenWrt ImageBuilder
+        run: |
+          IMAGEBUILDER_URL="https://downloads.immortalwrt.org/releases/22.03.5/targets/x86/64/immortalwrt-imagebuilder-22.03.5-x86-64.Linux-x86_64.tar.xz"
+          wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.xz
+          mkdir -p imagebuilder
+          tar -xf imagebuilder.tar.xz -C imagebuilder --strip-components=1
+          rm imagebuilder.tar.xz
 
       - name: Set Environment Variables
         run: |
-          echo "PROFILE=generic" >> $GITHUB_ENV
           echo "profile=${{ github.event.inputs.profile }}" >> $GITHUB_ENV
           echo "include_docker=${{ github.event.inputs.include_docker }}" >> $GITHUB_ENV
           echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
           echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
           echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
 
-      - name: Download OpenWrt ImageBuilder
+      - name: Create PPPoE Config File (if enabled)
+        if: github.event.inputs.enable_pppoe == 'yes'
         run: |
-          IMAGEBUILDER_URL="https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-imagebuilder-22.03.5-x86-64.Linux-x86_64.tar.xz"
-          wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.xz
-          mkdir -p imagebuilder
-          tar -xf imagebuilder.tar.xz -C imagebuilder --strip-components=1
-          rm imagebuilder.tar.xz
+          mkdir -p $GITHUB_WORKSPACE/files/etc/config
+          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/network
+          config interface 'wan'
+              option proto 'pppoe'
+              option username '${{ github.event.inputs.pppoe_account }}'
+              option password '${{ github.event.inputs.pppoe_password }}'
+          EOF
 
-      - name: Validate PPPoE Inputs
+      - name: Download Additional Packages
         run: |
-          if [[ "${{ github.event.inputs.enable_pppoe }}" == "yes" ]]; then
-            if [[ -z "${{ github.event.inputs.pppoe_account }}" || -z "${{ github.event.inputs.pppoe_password }}" ]]; then
-              echo "Error: PPPoE account and password must be provided when PPPoE is enabled!"
-              exit 1
-            fi
-          fi
+          mkdir -p $GITHUB_WORKSPACE/files/packages
+          cd $GITHUB_WORKSPACE/files/packages
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-app-advancedplus_1.8.2_all.ipk
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
 
-      - name: Build ImmortalWrt-x86-64
+      - name: Add iStore and nikki Feeds
+        run: |
+          echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
+          echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> imagebuilder/feeds.conf.default
+          cd imagebuilder
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Compile luci-app-nikki
         run: |
           cd imagebuilder
-          PACKAGES="luci-app-opkg luci-app-firewall luci-mod-admin-full luci-theme-bootstrap"
-          PACKAGES="$PACKAGES luci-proto-ipv6 luci-proto-ppp luci-app-diskman luci-app-attendedsysupgrade"
-          PACKAGES="$PACKAGES openssh-sftp-server -dnsmasq dnsmasq-full -wpad-basic -wpadmini wpad-openssl"
-          
-          if [[ "${{ github.event.inputs.include_docker }}" == "yes" ]]; then
-            PACKAGES="$PACKAGES luci-app-dockerman"
+          make package/luci-app-nikki/compile
+
+      - name: Set Default Theme to Argon
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/files/etc/config
+          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/luci
+          config core 'main'
+              option mediaurlbase '/luci-static/argon'
+          EOF
+
+      - name: Build ImmortalWrt
+        run: |
+          cd imagebuilder
+          PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn luci-app-advancedplus luci-app-nikki"
+          if [ "$include_docker" = "yes" ]; then
+            PACKAGES="$PACKAGES luci-i18n-dockerman-zh-cn"
           fi
+          make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files" ROOTFS_PARTSIZE=$profile
 
-          make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="${{ github.workspace }}/files" ROOTFS_PARTSIZE=$profile
-
-          if [ $? -ne 0 ]; then
-            echo "Error: Build failed!"
-            exit 1
-          fi
-
-      - name: Generate Firmware SHA-256
+      - name: Generate SHA-256 Hash
         run: |
           OUTPUT=$(find $GITHUB_WORKSPACE/imagebuilder/bin/targets/x86/64/ -name "*squashfs-combined-efi.img.gz" | head -n 1)
           if [ -z "$OUTPUT" ]; then
@@ -97,13 +119,10 @@ jobs:
           fi
           cp "$OUTPUT" $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
           sha256sum "$GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz" > $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
-          sha256sum -c $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
 
-      - name: Upload Firmware to Release
-        uses: softprops/action-gh-release@v2.2.1
+      - name: Upload Firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: Autobuild-x86-64
-          body_path: $GITHUB_WORKSPACE/info.md
           files: |
             $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
             $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
