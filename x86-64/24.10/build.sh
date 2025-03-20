@@ -8,7 +8,7 @@ echo "Include Docker: $INCLUDE_DOCKER"
 echo "Create pppoe-settings"
 mkdir -p  /home/build/immortalwrt/files/etc/config
 
-# 创建pppoe配置文件 yml传入环境变量ENABLE_PPPOE等 写入配置文件 供99-custom.sh读取
+# 创建pppoe配置文件 yml传入环境变量ENABLE_PPPOE等，写入配置文件供99-custom.sh读取
 cat << EOF > /home/build/immortalwrt/files/etc/config/pppoe-settings
 enable_pppoe=${ENABLE_PPPOE}
 pppoe_account=${PPPOE_ACCOUNT}
@@ -20,9 +20,13 @@ cat /home/build/immortalwrt/files/etc/config/pppoe-settings
 # 输出调试信息
 echo "$(date '+%Y-%m-%d %H:%M:%S') - 开始编译..."
 
+# 添加 nikki / istore / kucat 源
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Adding nikki, istore, kucat sources"
+echo "src-git nikki https://github.com/nikki-app/openwrt-packages.git" >> /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
+echo "src-git istore https://github.com/istore-openwrt/istore.git" >> /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
+echo "src-git kucat https://github.com/kucat/kucat.git" >> /home/build/immortalwrt/files/etc/opkg/customfeeds.conf
 
-
-# 定义所需安装的包列表 下列插件你都可以自行删减
+# 定义所需安装的包列表
 PACKAGES=""
 PACKAGES="$PACKAGES curl"
 PACKAGES="$PACKAGES luci-i18n-diskman-zh-cn"
@@ -42,6 +46,14 @@ PACKAGES="$PACKAGES openssh-sftp-server"
 PACKAGES="$PACKAGES fdisk"
 PACKAGES="$PACKAGES script-utils"
 PACKAGES="$PACKAGES luci-i18n-samba4-zh-cn"
+
+# 拉取 nikki / istore / kucat 相关插件
+PACKAGES="$PACKAGES luci-app-nikki"
+PACKAGES="$PACKAGES luci-i18n-nikki-zh-cn"
+PACKAGES="$PACKAGES luci-app-istorex"
+PACKAGES="$PACKAGES luci-i18n-istorex-zh-cn"
+PACKAGES="$PACKAGES luci-app-kucat"
+PACKAGES="$PACKAGES luci-i18n-kucat-zh-cn"
 
 # 判断是否需要编译 Docker 插件
 if [ "$INCLUDE_DOCKER" = "yes" ]; then
