@@ -35,14 +35,17 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # 1. 检出代码
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      # 2. 安装构建所需依赖
       - name: Install Required Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3 zstd
+          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
 
+      # 3. 下载并解压 ImmortalWrt ImageBuilder
       - name: Download ImmortalWrt ImageBuilder
         run: |
           IMAGEBUILDER_URL="https://downloads.immortalwrt.org/releases/24.10.0/targets/x86/64/immortalwrt-imagebuilder-24.10.0-x86-64.Linux-x86_64.tar.zst"
@@ -51,20 +54,25 @@ jobs:
           tar --use-compress-program=unzstd -xf imagebuilder.tar.zst -C imagebuilder --strip-components=1
           rm imagebuilder.tar.zst
 
+      # 4. 检查可用的 Profile
       - name: Check Available Profiles
         run: |
           cd imagebuilder
           AVAILABLE_PROFILES=$(make info | grep -E '^Profile' | awk '{print $2}')
           echo "Available Profiles: $AVAILABLE_PROFILES"
+            
           if echo "$AVAILABLE_PROFILES" | grep -q "^generic$"; then
+            echo "Using Profile: generic"
             echo "profile_name=generic" >> $GITHUB_ENV
           elif echo "$AVAILABLE_PROFILES" | grep -q "^legacy$"; then
+            echo "Using Profile: legacy"
             echo "profile_name=legacy" >> $GITHUB_ENV
           else
-            echo "Error: No suitable Profile found for x86-64!"
+            echo "Error: Could not find a suitable Profile for x86-64!"
             exit 1
           fi
 
+      # 5. 设置环境变量
       - name: Set Environment Variables
         run: |
           echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
@@ -73,6 +81,7 @@ jobs:
           echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
           echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
 
+      # 6. 验证 PPPoE 输入
       - name: Validate PPPoE Inputs
         run: |
           if [ "$enable_pppoe" = "yes" ] && { [ -z "$pppoe_account" ] || [ -z "$pppoe_password" ]; }; then
@@ -80,47 +89,51 @@ jobs:
             exit 1
           fi
 
+      # 7. 创建 PPPoE 配置文件
       - name: Create PPPoE Config File
-        if: ${{ github.event.inputs.enable_pppoe == 'yes' }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
           cat << EOF > $GITHUB_WORKSPACE/files/etc/config/network
-          config interface 'wan'
-              option ifname 'eth0'
-              option proto 'pppoe'
-              option username '$pppoe_account'
-              option password '$pppoe_password'
-          EOF
+config interface 'wan'
+    option ifname 'eth0'
+    option proto 'pppoe'
+    option username '$pppoe_account'
+    option password '$pppoe_password'
+EOF
 
-      - name: Add Custom Feeds (nikki, kucat, istore)
+      # 8. 下载额外 IPK 包
+      - name: Download IPK Packages
         run: |
-          echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> imagebuilder/feeds.conf.default
-          echo "src-git kucat https://github.com/kucat/luci-app-kucat.git;main" >> imagebuilder/feeds.conf.default
-          echo "src-git istore https://github.com/linkease/istore.git;main" >> imagebuilder/feeds.conf.default
+          mkdir -p $GITHUB_WORKSPACE/files/packages
+          cd $GITHUB_WORKSPACE/files/packages
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-app-advancedplus_1.8.2_all.ipk
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
+
+      # 9. 添加 iStore 和 nikki 源
+      - name: Add iStore and nikki Feeds
+        run: |
+          echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
+          echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> imagebuilder/feeds.conf.default
           cd imagebuilder
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      # 10. 设置默认主题为 Argon
       - name: Set Default Theme to Argon
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
           cat << EOF > $GITHUB_WORKSPACE/files/etc/config/luci
-          config core 'main'
-              option mediaurlbase '/luci-static/argon'
-          EOF
+config core 'main'
+    option mediaurlbase '/luci-static/argon'
+EOF
 
+      # 11. 构建固件
       - name: Build ImmortalWrt-x86-64
         run: |
           cd imagebuilder
           PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn"
           PACKAGES="$PACKAGES luci-i18n-filebrowser-zh-cn luci-app-argon-config"
           PACKAGES="$PACKAGES luci-i18n-argon-config-zh-cn luci-i18n-package-manager-zh-cn"
-          PACKAGES="$PACKAGES luci-app-nikki luci-app-kucat luci-app-store"
-          [ "$include_docker" = "yes" ] && PACKAGES="$PACKAGES luci-app-docker"
+          echo "Starting build with packages: $PACKAGES"
           make image PROFILE=$profile_name PACKAGES="$PACKAGES"
-
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v3
-        with:
-          name: ImmortalWrt-Firmware
-          path: imagebuilder/bin/targets/x86/64/*.img.gz
