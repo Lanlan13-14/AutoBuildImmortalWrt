@@ -1,4 +1,4 @@
-name: Build ImmortalWrt-x86-64
+name: Build ImmortalWrt-x86-64 Beta
 
 on:
   workflow_dispatch:
@@ -39,7 +39,22 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 2. 设置环境变量
+      # 2. 安装构建所需的依赖
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
+
+      # 3. 下载并解压 OpenWrt ImageBuilder
+      - name: Download OpenWrt ImageBuilder
+        run: |
+          IMAGEBUILDER_URL="https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-imagebuilder-22.03.5-x86-64.Linux-x86_64.tar.xz"
+          wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.xz
+          mkdir -p imagebuilder
+          tar -xf imagebuilder.tar.xz -C imagebuilder --strip-components=1
+          rm imagebuilder.tar.xz
+
+      # 4. 设置环境变量
       - name: Set Environment Variables
         run: |
           echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
@@ -48,7 +63,7 @@ jobs:
           echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
           echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
 
-      # 3. 验证 PPPoE 输入
+      # 5. 验证 PPPoE 输入是否正确
       - name: Validate PPPoE Inputs
         run: |
           if [ "$enable_pppoe" = "yes" ] && { [ -z "$pppoe_account" ] || [ -z "$pppoe_password" ]; }; then
@@ -56,47 +71,46 @@ jobs:
             exit 1
           fi
 
-      # 4. 创建 PPPoE 配置文件
-      - name: Create PPPoE Settings
+      # 6. 创建 PPPoE 配置文件
+      - name: Create PPPoE Config File
         run: |
-          mkdir -p ${{ github.workspace }}/files/etc/config
-          cat << EOF > ${{ github.workspace }}/files/etc/config/pppoe-settings
+          mkdir -p $GITHUB_WORKSPACE/files/etc/config
+          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/pppoe-settings
           enable_pppoe=$enable_pppoe
           pppoe_account=$pppoe_account
           pppoe_password=$pppoe_password
           EOF
 
-      # 5. 下载并保存 IPK 软件包
+      # 7. 下载额外的 IPK 软件包
       - name: Download IPK Packages
         run: |
-          mkdir -p ${{ github.workspace }}/files/packages
-          cd ${{ github.workspace }}/files/packages
+          mkdir -p $GITHUB_WORKSPACE/files/packages
+          cd $GITHUB_WORKSPACE/files/packages
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-app-advancedplus_1.8.2_all.ipk
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
 
-      # 6. 添加 iStore 源
+      # 8. 添加 iStore 源
       - name: Add iStore Feed
         run: |
-          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-          cat feeds.conf.default
+          echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
+          cd imagebuilder
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-      # 7. 设置默认主题为 Argon
+      # 9. 设置默认主题为 Argon
       - name: Set Default Theme to Argon
         run: |
-          mkdir -p ${{ github.workspace }}/files/etc/config
-          cat << EOF > ${{ github.workspace }}/files/etc/config/luci
+          mkdir -p $GITHUB_WORKSPACE/files/etc/config
+          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/luci
           config core 'main'
               option mediaurlbase '/luci-static/argon'
           EOF
 
-      # 8. 编译 ImmortalWrt 固件
+      # 10. 编译 ImmortalWrt 固件
       - name: Build ImmortalWrt-x86-64
         run: |
-          profiles=$profile
-          include_docker=$include_docker
-
-          # 定义软件包
+          cd imagebuilder
           PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn"
           PACKAGES="$PACKAGES luci-i18n-filebrowser-zh-cn luci-app-argon-config"
           PACKAGES="$PACKAGES luci-i18n-argon-config-zh-cn luci-i18n-package-manager-zh-cn"
@@ -108,45 +122,36 @@ jobs:
           PACKAGES="$PACKAGES luci-i18n-samba4-zh-cn luci-app-store"
           PACKAGES="$PACKAGES luci-app-advancedplus luci-theme-kucat"
 
-          # 判断是否需要编译 Docker 插件
           if [ "$include_docker" = "yes" ]; then
             PACKAGES="$PACKAGES luci-i18n-dockerman-zh-cn"
           fi
 
-          # 构建固件
-          make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="${{ github.workspace }}/files" ROOTFS_PARTSIZE=$profiles
-          
+          make image PROFILE="x86-64" PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files" ROOTFS_PARTSIZE=$profile
+
           if [ $? -ne 0 ]; then
             echo "Error: Build failed!"
             exit 1
           fi
 
-      # 9. 计算固件的 SHA-256 哈希值
+      # 11. 计算固件的 SHA-256 哈希值
       - name: Generate Firmware SHA-256
         run: |
-          OUTPUT=$(find ${{ github.workspace }}/bin/targets/x86/64/ -name "*squashfs-combined-efi.img.gz" | head -n 1)
+          OUTPUT=$(find $GITHUB_WORKSPACE/imagebuilder/bin/targets/x86/64/ -name "*squashfs-combined-efi.img.gz" | head -n 1)
           if [ -z "$OUTPUT" ]; then
             echo "Error: No firmware file found!"
             exit 1
           fi
-          cp "$OUTPUT" ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz
-          sha256sum "${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz" > ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
-          sha256sum -c ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+          cp "$OUTPUT" $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
+          sha256sum "$GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz" > $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+          sha256sum -c $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
 
-      # 10. 生成构建信息
-      - name: Create Build Info
-        run: |
-          echo "编译固件大小: $profile MB" > ${{ github.workspace }}/info.md
-          echo "包含 Docker: $include_docker" >> ${{ github.workspace }}/info.md
-          echo "PPPoE 配置信息: $enable_pppoe" >> ${{ github.workspace }}/info.md
-
-      # 11. 上传固件作为 GitHub Release 资产
+      # 12. 上传固件作为 GitHub Release 资产
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v2.2.1
         with:
           tag_name: Autobuild-x86-64
-          body_path: ${{ github.workspace }}/info.md
+          body_path: $GITHUB_WORKSPACE/info.md
           files: |
-            ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz
-            ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+            $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
+            $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
           token: ${{ secrets.GITHUB_TOKEN }}
