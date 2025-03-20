@@ -1,0 +1,152 @@
+name: Build ImmortalWrt-x86-64
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: '请输入要编译固件大小 单位(MB)'
+        required: true
+        default: '1024'
+      include_docker:
+        description: '是否编译 Docker 插件'
+        required: true
+        default: 'yes'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+      enable_pppoe:
+        description: "是否配置PPPoE拨号信息?"
+        required: true
+        default: 'no'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+      pppoe_account:
+        description: "宽带账号 (若启用PPPoE)"
+        required: false
+      pppoe_password:
+        description: "宽带密码 (若启用PPPoE)"
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # 2. 设置环境变量
+      - name: Set Environment Variables
+        run: |
+          echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
+          echo "profile=${{ github.event.inputs.profile }}" >> $GITHUB_ENV
+          echo "include_docker=${{ github.event.inputs.include_docker }}" >> $GITHUB_ENV
+          echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
+          echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
+
+      # 3. 验证 PPPoE 输入
+      - name: Validate PPPoE Inputs
+        run: |
+          if [ "$enable_pppoe" = "yes" ] && { [ -z "$pppoe_account" ] || [ -z "$pppoe_password" ]; }; then
+            echo "Error: PPPoE account and password must be provided when PPPoE is enabled!"
+            exit 1
+          fi
+
+      # 4. 创建 PPPoE 配置文件
+      - name: Create PPPoE Settings
+        run: |
+          mkdir -p ${{ github.workspace }}/files/etc/config
+          cat << EOF > ${{ github.workspace }}/files/etc/config/pppoe-settings
+          enable_pppoe=$enable_pppoe
+          pppoe_account=$pppoe_account
+          pppoe_password=$pppoe_password
+          EOF
+
+      # 5. 下载并保存 IPK 软件包
+      - name: Download IPK Packages
+        run: |
+          mkdir -p ${{ github.workspace }}/files/packages
+          cd ${{ github.workspace }}/files/packages
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-app-advancedplus_1.8.2_all.ipk
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
+          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
+
+      # 6. 添加 iStore 源
+      - name: Add iStore Feed
+        run: |
+          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          cat feeds.conf.default
+
+      # 7. 设置默认主题为 Argon
+      - name: Set Default Theme to Argon
+        run: |
+          mkdir -p ${{ github.workspace }}/files/etc/config
+          cat << EOF > ${{ github.workspace }}/files/etc/config/luci
+          config core 'main'
+              option mediaurlbase '/luci-static/argon'
+          EOF
+
+      # 8. 编译 ImmortalWrt 固件
+      - name: Build ImmortalWrt-x86-64
+        run: |
+          profiles=$profile
+          include_docker=$include_docker
+
+          # 定义软件包
+          PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn"
+          PACKAGES="$PACKAGES luci-i18n-filebrowser-zh-cn luci-app-argon-config"
+          PACKAGES="$PACKAGES luci-i18n-argon-config-zh-cn luci-i18n-package-manager-zh-cn"
+          PACKAGES="$PACKAGES luci-i18n-ttyd-zh-cn luci-i18n-passwall-zh-cn"
+          PACKAGES="$PACKAGES luci-app-openclash luci-i18n-homeproxy-zh-cn"
+          PACKAGES="$PACKAGES openssh-sftp-server luci-i18n-ddns-go-zh-cn"
+          PACKAGES="$PACKAGES luci-proto-wireguard qrencode kmod-tcp-bbr"
+          PACKAGES="$PACKAGES luci-i18n-upnp-zh-cn fdisk script-utils"
+          PACKAGES="$PACKAGES luci-i18n-samba4-zh-cn luci-app-store"
+          PACKAGES="$PACKAGES luci-app-advancedplus luci-theme-kucat"
+
+          # 判断是否需要编译 Docker 插件
+          if [ "$include_docker" = "yes" ]; then
+            PACKAGES="$PACKAGES luci-i18n-dockerman-zh-cn"
+          fi
+
+          # 构建固件
+          make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="${{ github.workspace }}/files" ROOTFS_PARTSIZE=$profiles
+          
+          if [ $? -ne 0 ]; then
+            echo "Error: Build failed!"
+            exit 1
+          fi
+
+      # 9. 计算固件的 SHA-256 哈希值
+      - name: Generate Firmware SHA-256
+        run: |
+          OUTPUT=$(find ${{ github.workspace }}/bin/targets/x86/64/ -name "*squashfs-combined-efi.img.gz" | head -n 1)
+          if [ -z "$OUTPUT" ]; then
+            echo "Error: No firmware file found!"
+            exit 1
+          fi
+          cp "$OUTPUT" ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz
+          sha256sum "${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz" > ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+          sha256sum -c ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+
+      # 10. 生成构建信息
+      - name: Create Build Info
+        run: |
+          echo "编译固件大小: $profile MB" > ${{ github.workspace }}/info.md
+          echo "包含 Docker: $include_docker" >> ${{ github.workspace }}/info.md
+          echo "PPPoE 配置信息: $enable_pppoe" >> ${{ github.workspace }}/info.md
+
+      # 11. 上传固件作为 GitHub Release 资产
+      - name: Upload Firmware to Release
+        uses: softprops/action-gh-release@v2.2.1
+        with:
+          tag_name: Autobuild-x86-64
+          body_path: ${{ github.workspace }}/info.md
+          files: |
+            ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz
+            ${{ github.workspace }}/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
