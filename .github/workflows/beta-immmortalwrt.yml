@@ -1,6 +1,13 @@
-name: Build ImmortalWrt Firmware
+#
+# ImmortalWrt Builder
+#
+# 说明: 使用 ImmortalWrt ImageBuilder 构建固件，支持 PPPoE 配置、额外 IPK 包下载等操作
+#
+
+name: ImmortalWrt Builder
 
 on:
+  repository_dispatch:
   workflow_dispatch:
     inputs:
       profile:
@@ -30,21 +37,29 @@ on:
         description: "宽带密码（若启用 PPPoE）"
         required: false
 
+env:
+  TZ: Asia/Shanghai
+  IMAGEBUILDER_URL: "https://downloads.immortalwrt.org/releases/24.10.0/targets/x86/64/immortalwrt-imagebuilder-24.10.0-x86-64.Linux-x86_64.tar.zst"
+  UPLOAD_ARTIFACT: true
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Install Required Dependencies
+      - name: Set Timezone
+        run: sudo timedatectl set-timezone "$TZ"
+
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
 
       - name: Download ImmortalWrt ImageBuilder
         run: |
-          IMAGEBUILDER_URL="https://downloads.immortalwrt.org/releases/24.10.0/targets/x86/64/immortalwrt-imagebuilder-24.10.0-x86-64.Linux-x86_64.tar.zst"
           wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.zst
           mkdir -p imagebuilder
           tar --use-compress-program=unzstd -xf imagebuilder.tar.zst -C imagebuilder --strip-components=1
@@ -62,11 +77,11 @@ jobs:
             echo "Using Profile: legacy"
             echo "profile_name=legacy" >> $GITHUB_ENV
           else
-            echo "Error: Could not find a suitable Profile for x86-64!"
+            echo "Error: No suitable profile found for x86-64!"
             exit 1
           fi
 
-      - name: Set Environment Variables
+      - name: Set Build Environment Variables
         run: |
           echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
           echo "profile_input=${{ github.event.inputs.profile }}" >> $GITHUB_ENV
@@ -82,17 +97,18 @@ jobs:
           fi
 
       - name: Create PPPoE Config File
+        if: ${{ github.event.inputs.enable_pppoe == 'yes' }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
-          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/network
+          cat << 'EOF' > $GITHUB_WORKSPACE/files/etc/config/network
 config interface 'wan'
     option ifname 'eth0'
     option proto 'pppoe'
-    option username '$pppoe_account'
-    option password '$pppoe_password'
+    option username '${{ github.event.inputs.pppoe_account }}'
+    option password '${{ github.event.inputs.pppoe_password }}'
 EOF
 
-      - name: Download IPK Packages
+      - name: Download Additional IPK Packages
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/packages
           cd $GITHUB_WORKSPACE/files/packages
@@ -100,25 +116,17 @@ EOF
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
 
-      - name: Add iStore and nikki Feeds
-        run: |
-          echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
-          echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> imagebuilder/feeds.conf.default
-          cd imagebuilder
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Set Default Theme to Argon
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/files/etc/config
-          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/luci
-config core 'main'
-    option mediaurlbase '/luci-static/argon'
-EOF
-
-      - name: Build ImmortalWrt-x86-64
+      - name: Build ImmortalWrt Firmware
         run: |
           cd imagebuilder
+          # 定义需要编译的包列表，可根据需要修改
           PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn luci-i18n-filebrowser-zh-cn luci-app-argon-config luci-i18n-argon-config-zh-cn luci-i18n-package-manager-zh-cn"
           echo "Starting build with packages: $PACKAGES"
           make image PROFILE=$profile_name PACKAGES="$PACKAGES"
+
+      - name: Upload Firmware Artifact
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ImmortalWrt_Firmware_${{ github.run_id }}
+          path: imagebuilder/bin
