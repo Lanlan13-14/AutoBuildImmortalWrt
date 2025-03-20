@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: '请输入要编译固件大小 单位(MB)'
+        description: 'Enter the firmware size in MB'
         required: true
         default: '1024'
       include_docker:
-        description: '是否编译 Docker 插件'
+        description: 'Include Docker plugin?'
         required: true
         default: 'yes'
         type: choice
@@ -16,7 +16,7 @@ on:
           - 'yes'
           - 'no'
       enable_pppoe:
-        description: "是否配置 PPPoE 拨号信息?"
+        description: "Configure PPPoE?"
         required: true
         default: 'no'
         type: choice
@@ -24,10 +24,10 @@ on:
           - 'yes'
           - 'no'
       pppoe_account:
-        description: "宽带账号（若启用 PPPoE）"
+        description: "PPPoE Account (if enabled)"
         required: false
       pppoe_password:
-        description: "宽带密码（若启用 PPPoE）"
+        description: "PPPoE Password (if enabled)"
         required: false
 
 jobs:
@@ -35,44 +35,22 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # 1. 检出代码
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 2. 安装构建所需依赖
-      - name: Install Required Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
 
-      # 3. 下载并解压 ImmortalWrt ImageBuilder
       - name: Download ImmortalWrt ImageBuilder
         run: |
-          IMAGEBUILDER_URL="https://downloads.immortalwrt.org/releases/24.10.0/targets/x86/64/immortalwrt-imagebuilder-24.10.0-x86-64.Linux-x86_64.tar.zst"
-          wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.zst
+          IMAGEBUILDER_URL="https://downloads.immortalwrt.org/releases/22.03.5/targets/x86/64/immortalwrt-imagebuilder-22.03.5-x86-64.Linux-x86_64.tar.xz"
+          wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.xz
           mkdir -p imagebuilder
-          tar --use-compress-program=unzstd -xf imagebuilder.tar.zst -C imagebuilder --strip-components=1
-          rm imagebuilder.tar.zst
+          tar -xf imagebuilder.tar.xz -C imagebuilder --strip-components=1
+          rm imagebuilder.tar.xz
 
-      # 4. 检查可用的 Profile
-      - name: Check Available Profiles
-        run: |
-          cd imagebuilder
-          AVAILABLE_PROFILES=$(make info | grep -E '^Profile' | awk '{print $2}')
-          echo "Available Profiles: $AVAILABLE_PROFILES"
-            
-          if echo "$AVAILABLE_PROFILES" | grep -q "^generic$"; then
-            echo "Using Profile: generic"
-            echo "profile_name=generic" >> $GITHUB_ENV
-          elif echo "$AVAILABLE_PROFILES" | grep -q "^legacy$"; then
-            echo "Using Profile: legacy"
-            echo "profile_name=legacy" >> $GITHUB_ENV
-          else
-            echo "Error: Could not find a suitable Profile for x86-64!"
-            exit 1
-          fi
-
-      # 5. 设置环境变量
       - name: Set Environment Variables
         run: |
           echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
@@ -81,7 +59,6 @@ jobs:
           echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
           echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
 
-      # 6. 验证 PPPoE 输入
       - name: Validate PPPoE Inputs
         run: |
           if [ "$enable_pppoe" = "yes" ] && { [ -z "$pppoe_account" ] || [ -z "$pppoe_password" ]; }; then
@@ -89,20 +66,16 @@ jobs:
             exit 1
           fi
 
-      # 7. 创建 PPPoE 配置文件
       - name: Create PPPoE Config File
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
-          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/network
-          config interface 'wan'
-              option ifname 'eth0'
-              option proto 'pppoe'
-              option username '$pppoe_account'
-              option password '$pppoe_password'
+          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/pppoe-settings
+          enable_pppoe=$enable_pppoe
+          pppoe_account=$pppoe_account
+          pppoe_password=$pppoe_password
           EOF
 
-      # 8. 下载额外 IPK 包
-      - name: Download IPK Packages
+      - name: Download Additional IPK Packages
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/packages
           cd $GITHUB_WORKSPACE/files/packages
@@ -110,8 +83,7 @@ jobs:
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
           wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
 
-      # 9. 添加 iStore 和 nikki 源
-      - name: Add iStore and nikki Feeds
+      - name: Add Feeds and Update
         run: |
           echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
           echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> imagebuilder/feeds.conf.default
@@ -119,7 +91,6 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 10. 设置默认主题为 Argon
       - name: Set Default Theme to Argon
         run: |
           mkdir -p $GITHUB_WORKSPACE/files/etc/config
@@ -128,11 +99,11 @@ jobs:
               option mediaurlbase '/luci-static/argon'
           EOF
 
-      # 11. 构建固件
-      - name: Build ImmortalWrt-x86-64
+      - name: Build ImmortalWrt Firmware
         run: |
           cd imagebuilder
           PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn"
           PACKAGES="$PACKAGES luci-i18n-filebrowser-zh-cn luci-app-argon-config"
           PACKAGES="$PACKAGES luci-i18n-argon-config-zh-cn luci-i18n-package-manager-zh-cn"
-          PACKAGES="$PACKAGES luci-i18n-5
+          PACKAGES="$PACKAGES luci-i18n-ttyd-zh-cn luci-i18n-passwall-zh-cn"
+          PACKAGES18
