@@ -1,12 +1,12 @@
-name: Build ImmortalWrt-x86-64 beta
+name: Build ImmortalWrt Firmware Beta
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: '请输入要编译固件大小 单位(MB)'
+        description: 'immortalwrt-x86-64-24.10'
         required: true
-        default: '1024'
+        default: 'x86_64'
       include_docker:
         description: '是否编译 Docker 插件'
         required: true
@@ -16,7 +16,7 @@ on:
           - 'yes'
           - 'no'
       enable_pppoe:
-        description: "是否配置 PPPoE 拨号信息?"
+        description: '是否配置 PPPoE 拨号信息？'
         required: true
         default: 'no'
         type: choice
@@ -24,150 +24,95 @@ on:
           - 'yes'
           - 'no'
       pppoe_account:
-        description: "宽带账号（若启用 PPPoE）"
+        description: '宽带账号（若启用 PPPoE）'
         required: false
       pppoe_password:
-        description: "宽带密码（若启用 PPPoE）"
+        description: '宽带密码（若启用 PPPoE）'
         required: false
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-latest
     steps:
-      # 1. 检出代码
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      # Step 1. 检出仓库代码（如果需要的话）
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      # 2. 安装构建所需依赖
-      - name: Install Required Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk gettext unzip file libssl-dev wget git python3
-
-      # 3. 下载并解压 OpenWrt ImageBuilder
-      - name: Download OpenWrt ImageBuilder
-        run: |
-          IMAGEBUILDER_URL="https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-imagebuilder-22.03.5-x86-64.Linux-x86_64.tar.xz"
-          wget -q $IMAGEBUILDER_URL -O imagebuilder.tar.xz
-          mkdir -p imagebuilder
-          tar -xf imagebuilder.tar.xz -C imagebuilder --strip-components=1
-          rm imagebuilder.tar.xz
-
-      # 4. 检查可用的 Profile
-      - name: Check Available Profiles
-        run: |
-          cd imagebuilder
-          AVAILABLE_PROFILES=$(make info | grep -E '^Profile' | awk '{print $2}')
-          echo "Available Profiles: $AVAILABLE_PROFILES"
-          
-          if echo "$AVAILABLE_PROFILES" | grep -q "^generic$"; then
-            echo "Using Profile: generic"
-            echo "profile_name=generic" >> $GITHUB_ENV
-          elif echo "$AVAILABLE_PROFILES" | grep -q "^legacy$"; then
-            echo "Using Profile: legacy"
-            echo "profile_name=legacy" >> $GITHUB_ENV
-          else
-            echo "Error: Could not find a suitable Profile for x86-64!"
-            exit 1
-          fi
-
-      # 5. 设置环境变量
+      # Step 2. 设置环境变量（将输入参数写入环境变量）
       - name: Set Environment Variables
         run: |
-          echo "enable_pppoe=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
-          echo "profile=${{ github.event.inputs.profile }}" >> $GITHUB_ENV
-          echo "include_docker=${{ github.event.inputs.include_docker }}" >> $GITHUB_ENV
-          echo "pppoe_account=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
-          echo "pppoe_password=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
+          echo "PROFILE=${{ github.event.inputs.profile }}" >> $GITHUB_ENV
+          echo "INCLUDE_DOCKER=${{ github.event.inputs.include_docker }}" >> $GITHUB_ENV
+          echo "ENABLE_PPPOE=${{ github.event.inputs.enable_pppoe }}" >> $GITHUB_ENV
+          echo "PPPOE_ACCOUNT=${{ github.event.inputs.pppoe_account }}" >> $GITHUB_ENV
+          echo "PPPOE_PASSWORD=${{ github.event.inputs.pppoe_password }}" >> $GITHUB_ENV
 
-      # 6. 验证 PPPoE 输入
-      - name: Validate PPPoE Inputs
+      # Step 3. 安装 curl（后续用于下载 imm.config）
+      - name: Install curl
         run: |
-          if [ "$enable_pppoe" = "yes" ] && { [ -z "$pppoe_account" ] || [ -z "$pppoe_password" ]; }; then
-            echo "Error: PPPoE account and password must be provided when PPPoE is enabled!"
-            exit 1
-          fi
+          sudo apt-get update
+          sudo apt-get install -y curl
 
-      # 7. 创建 PPPoE 配置文件
-      - name: Create PPPoE Config File
+      # Step 4. 下载远程 imm.config 文件
+      - name: Download imm.config
         run: |
-          mkdir -p $GITHUB_WORKSPACE/files/etc/config
-          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/pppoe-settings
-          enable_pppoe=$enable_pppoe
-          pppoe_account=$pppoe_account
-          pppoe_password=$pppoe_password
-          EOF
+          mkdir -p x86-64
+          curl -L https://raw.githubusercontent.com/Lanlan13-14/AutoBuildImmortalWrt/refs/heads/master/x86-64/imm.config -o x86-64/imm.config
 
-      # 8. 下载额外 IPK 包
-      - name: Download IPK Packages
+      # Step 5. 使用 Docker imagebuilder 进行固件构建
+      # 将 build.sh 的逻辑内嵌到 docker run 命令中，不再依赖外部 build.sh 文件
+      - name: Build ImmortalWrt-x86-64-efi
         run: |
-          mkdir -p $GITHUB_WORKSPACE/files/packages
-          cd $GITHUB_WORKSPACE/files/packages
-          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-app-advancedplus_1.8.2_all.ipk
-          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-i18n-advancedplus-zh-cn_git-25.052.66486-a996405_all.ipk
-          wget -q https://github.com/sirpdboy/luci-theme-kucat/releases/download/v2.5.4/luci-theme-kucat_2.5.4_all.ipk
+          profiles="${{ github.event.inputs.profile }}"
+          include_docker="${{ github.event.inputs.include_docker }}"
+          IFS=',' read -r -a profile_array <<< "$profiles"
+          for profile in "${profile_array[@]}"; do
+            echo "Building for profile: $profile"
+            docker run --rm -i \
+              --user root \
+              -v "${{ github.workspace }}/bin:/home/build/immortalwrt/bin" \
+              -v "${{ github.workspace }}/files:/home/build/immortalwrt/files" \
+              -v "${{ github.workspace }}/x86-64/imm.config:/home/build/immortalwrt/.config" \
+              -e PROFILE="$profile" \
+              -e INCLUDE_DOCKER="$include_docker" \
+              -e ENABLE_PPPOE="${{ github.event.inputs.enable_pppoe }}" \
+              -e PPPOE_ACCOUNT="${{ github.event.inputs.pppoe_account }}" \
+              -e PPPOE_PASSWORD="${{ github.event.inputs.pppoe_password }}" \
+              immortalwrt/imagebuilder:x86-64-openwrt-24.10.0 /bin/bash -c "\
+                echo 'Using configuration:'; \
+                cat /home/build/immortalwrt/.config; \
+                echo 'Starting firmware build for profile: \$PROFILE'; \
+                # 模拟 build.sh 逻辑：调用 imagebuilder 内置命令生成固件
+                make image; \
+                echo 'Build completed.'"
+          done
 
-      # 9. 添加 iStore 源
-      - name: Add iStore Feed
-        run: |
-          echo 'src-git istore https://github.com/linkease/istore;main' >> imagebuilder/feeds.conf.default
-          cd imagebuilder
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      # 10. 设置默认主题为 Argon
-      - name: Set Default Theme to Argon
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/files/etc/config
-          cat << EOF > $GITHUB_WORKSPACE/files/etc/config/luci
-          config core 'main'
-              option mediaurlbase '/luci-static/argon'
-          EOF
-
-      # 11. 构建固件
-      - name: Build ImmortalWrt-x86-64
-        run: |
-          cd imagebuilder
-          PACKAGES="curl luci-i18n-diskman-zh-cn luci-i18n-firewall-zh-cn"
-          PACKAGES="$PACKAGES luci-i18n-filebrowser-zh-cn luci-app-argon-config"
-          PACKAGES="$PACKAGES luci-i18n-argon-config-zh-cn luci-i18n-package-manager-zh-cn"
-          PACKAGES="$PACKAGES luci-i18n-ttyd-zh-cn luci-i18n-passwall-zh-cn"
-          PACKAGES="$PACKAGES luci-app-openclash luci-i18n-homeproxy-zh-cn"
-          PACKAGES="$PACKAGES openssh-sftp-server luci-i18n-ddns-go-zh-cn"
-          PACKAGES="$PACKAGES luci-proto-wireguard qrencode kmod-tcp-bbr"
-          PACKAGES="$PACKAGES luci-i18n-upnp-zh-cn fdisk script-utils"
-          PACKAGES="$PACKAGES luci-i18n-samba4-zh-cn luci-app-store"
-          PACKAGES="$PACKAGES luci-app-advancedplus luci-theme-kucat"
-
-          if [ "$include_docker" = "yes" ]; then
-            PACKAGES="$PACKAGES luci-i18n-dockerman-zh-cn"
-          fi
-
-          make image PROFILE="$profile_name" PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files" ROOTFS_PARTSIZE=$profile
-
-          if [ $? -ne 0 ]; then
-            echo "Error: Build failed!"
-            exit 1
-          fi
-
-      # 12. 生成固件哈希校验值
+      # Step 6. 生成固件 SHA-256 校验值
       - name: Generate Firmware SHA-256
         run: |
-          OUTPUT=$(find $GITHUB_WORKSPACE/imagebuilder/bin/targets/x86/64/ -name "*squashfs-combined-efi.img.gz" | head -n 1)
-          if [ -z "$OUTPUT" ]; then
-            echo "Error: No firmware file found!"
-            exit 1
-          fi
-          cp "$OUTPUT" $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
-          sha256sum "$GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz" > $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
-          sha256sum -c $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
+          cp $GITHUB_WORKSPACE/bin/targets/x86/64/*squashfs-combined-efi.img.gz $GITHUB_WORKSPACE
+          for file in *squashfs-combined-efi.img.gz; do
+            sha256sum "$file" > "$file.sha256"
+            sha256sum -c "$file.sha256"
+          done
 
-      # 13. 上传固件和校验文件
-      - name: Upload Firmware to GitHub Release
-        uses: softprops/action-gh-release@v2
+      # Step 7. 创建 info 文件（记录是否包含 Docker 插件）
+      - name: Create info
+        run: |
+          if [ "${{ github.event.inputs.include_docker }}" == "yes" ]; then
+            echo "#### 默认带 docker" > info.md
+          else
+            echo "NO docker" > info.md
+          fi
+
+      # Step 8. 上传固件及校验文件到 GitHub Release
+      - name: Upload ImmortalWrt as Release Assets
+        uses: softprops/action-gh-release@v2.2.1
         with:
+          tag_name: Autobuild-${{ github.event.inputs.profile }}
+          body_path: info.md
           files: |
-            $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz
-            $GITHUB_WORKSPACE/immortalwrt-x86-64-squashfs-combined-efi.img.gz.sha256
-          token: ${{ secrets.GITHUB_TOKEN }}
+            $GITHUB_WORKSPACE/*squashfs-combined-efi.img.gz
+            $GITHUB_WORKSPACE/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
