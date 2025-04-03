@@ -39,98 +39,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Create Directory Structure
-        run: |
-          mkdir -p ${{ github.workspace }}/x86-64/{scripts,24.10}
-          mkdir -p ${{ github.workspace }}/files/etc/uci-defaults
+      - name: Set executable permissions
+        run: chmod +x ${{ github.workspace }}/x86-64/build.sh
 
-      - name: Generate Required Files
-        run: |
-          # 生成基础编译脚本
-          cat > ${{ github.workspace }}/x86-64/24.10/build.sh << EOF
-          #!/bin/bash
-          echo "Starting ImmortalWrt build process..."
-          make -j$(nproc) || make -j1 V=s
-          EOF
-
-          # 生成默认配置文件
-          cat > ${{ github.workspace }}/x86-64/imm.config << EOF
-          CONFIG_TARGET_x86=y
-          CONFIG_TARGET_x86_64=y
-          CONFIG_TARGET_IMAGES_GZIP=y
-          CONFIG_PACKAGE_luci-app-nikki=y
-          CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
-          EOF
-
-          # 生成自动挂载脚本
-          cat > ${{ github.workspace }}/x86-64/scripts/auto-mount.sh << EOF
-          #!/bin/bash
-          echo "Auto mount scripts placeholder"
-          EOF
-
-      - name: Set Executable Permissions
-        run: |
-          chmod +x ${{ github.workspace }}/x86-64/24.10/build.sh
-          chmod +x ${{ github.workspace }}/x86-64/scripts/auto-mount.sh
-
-      - name: Generate Feeds Config
-        run: |
-          cat > feeds.conf.default << EOF
-          src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10
-          src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10
-          src-git routing https://github.com/openwrt/routing.git;openwrt-24.10
-          src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main
-          EOF
 
       - name: Validate PPPoE Inputs
         run: |
-          if [[ "${{ github.event.inputs.enable_pppoe }}" == "yes" ]]; then
-            if [[ -z "${{ github.event.inputs.pppoe_account }}" || -z "${{ github.event.inputs.pppoe_password }}" ]]; then
+          if [[ "${{ inputs.enable_pppoe }}" == "yes" ]]; then
+            if [[ -z "${{ inputs.pppoe_account }}" || -z "${{ inputs.pppoe_password }}" ]]; then
               echo "Error: PPPoE account and password must be provided when PPPoE is enabled!"
               exit 1
             fi
           fi
 
-      - name: Build ImmortalWrt
+      - name: Build ImmortalWrt-x86-64-efi
         run: |
           profiles="${{ github.event.inputs.profile }}"
           include_docker="${{ github.event.inputs.include_docker }}"
+          IFS=',' read -r -a profile_array <<< "$profiles"
           
-          docker run --rm -i \
-            --user root \
-            -v "${{ github.workspace }}/bin:/home/build/immortalwrt/bin" \
-            -v "${{ github.workspace }}/files:/home/build/immortalwrt/files" \
-            -v "${{ github.workspace }}/x86-64/imm.config:/home/build/immortalwrt/.config" \
-            -v "${{ github.workspace }}/x86-64/24.10/build.sh:/home/build/immortalwrt/build.sh" \
-            -v "${{ github.workspace }}/x86-64/scripts:/home/build/immortalwrt/scripts" \
-            -v "${{ github.workspace }}/feeds.conf.default:/home/build/immortalwrt/feeds.conf.default" \
-            -e PROFILE=$profiles \
-            -e INCLUDE_DOCKER=$include_docker \
-            -e ENABLE_PPPOE=${{ github.event.inputs.enable_pppoe }} \
-            -e PPPOE_ACCOUNT=${{ github.event.inputs.pppoe_account }} \
-            -e PPPOE_PASSWORD=${{ github.event.inputs.pppoe_password }} \
-            immortalwrt/imagebuilder:x86-64-openwrt-24.10.0 /bin/bash -c "
-              # 初始化环境
-              cd /home/build/immortalwrt
-              echo '当前工作目录: $(pwd)'
-              ls -al
-
-              # 更新源并安装组件
-              ./scripts/feeds update -a
-              ./scripts/feeds install -a
-
-              # 准备编译环境
-              make defconfig
-              make download -j$(nproc)
-
-              # 编译nikki插件
-              echo '开始编译nikki插件...'
-              make package/luci-app-nikki/compile V=s
-
-              # 执行主构建
-              echo '开始主构建流程...'
-              ./build.sh
-            "
+          for profile in "${profile_array[@]}"; do
+            echo "Building for profile: $profile"
+            
+            docker run --rm -i \
+              --user root \
+              -v "${{ github.workspace }}/bin:/home/build/immortalwrt/bin" \
+              -v "${{ github.workspace }}/files:/home/build/immortalwrt/files" \
+              -v "${{ github.workspace }}/x86-64/imm.config:/home/build/immortalwrt/.config" \
+              -v "${{ github.workspace }}/x86-64/24.10/build.sh:/home/build/immortalwrt/build.sh" \
+              -e PROFILE=$profile \
+              -e INCLUDE_DOCKER=$include_docker \
+              -e ENABLE_PPPOE=${{ inputs.enable_pppoe }} \
+              -e PPPOE_ACCOUNT=${{ inputs.pppoe_account }} \
+              -e PPPOE_PASSWORD=${{ inputs.pppoe_password }} \
+              immortalwrt/imagebuilder:x86-64-openwrt-24.10.0 /bin/bash /home/build/immortalwrt/build.sh
+          done
 
       - name: Generate Firmware SHA-256
         run: |
@@ -140,17 +83,16 @@ jobs:
             sha256sum -c "$file.sha256"
           done
 
-      - name: Create Build Info
+      - name: Create info
         run: |
-          echo "# Build Report" > ${{ github.workspace }}/info.md
-          echo "## Build Parameters" >> ${{ github.workspace }}/info.md
-          echo "- 固件大小: ${{ github.event.inputs.profile }}MB" >> ${{ github.workspace }}/info.md
-          echo "- 包含Docker: ${{ github.event.inputs.include_docker }}" >> ${{ github.workspace }}/info.md
-          echo "- PPPoE拨号: ${{ github.event.inputs.enable_pppoe }}" >> ${{ github.workspace }}/info.md
-          echo "## 包含插件" >> ${{ github.workspace }}/info.md
-          echo "- luci-app-nikki ([源码仓库](https://github.com/nikkinikki-org/OpenWrt-nikki))" >> ${{ github.workspace }}/info.md
+          if [ "${{ github.event.inputs.include_docker }}" == "yes" ]; then
+            extra_content="#### 默认带docker"
+            echo -e "\n $extra_content" >> ${{ github.workspace }}/info.md
+          else
+            echo -e "NO docker"
+          fi
 
-      - name: Upload Release Assets
+      - name: Upload ImmortWrt as release assets
         uses: softprops/action-gh-release@v2.2.1
         with:
           tag_name: Autobuild-x86-64
@@ -159,3 +101,5 @@ jobs:
             ${{ github.workspace }}/*squashfs-combined-efi.img.gz
             ${{ github.workspace }}/*.sha256
           token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
