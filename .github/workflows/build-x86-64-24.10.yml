@@ -42,7 +42,6 @@ jobs:
       - name: Set executable permissions
         run: chmod +x ${{ github.workspace }}/x86-64/build.sh
 
-
       - name: Validate PPPoE Inputs
         run: |
           if [[ "${{ inputs.enable_pppoe }}" == "yes" ]]; then
@@ -51,6 +50,20 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Compilation Step
+        run: |
+          # add feed
+          echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
+          
+          # update & install feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+          # make package
+          make package/luci-app-nikki/compile
+          
+          echo "The ipk/apk file will be found under bin/packages/your_architecture/nikki."
 
       - name: Build ImmortalWrt-x86-64-efi
         run: |
@@ -103,4 +116,3 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
