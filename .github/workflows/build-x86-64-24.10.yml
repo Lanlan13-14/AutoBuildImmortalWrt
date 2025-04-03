@@ -53,6 +53,9 @@ jobs:
 
       - name: Compilation Step
         run: |
+          # Navigate to the OpenWrt source directory
+          cd ${{ github.workspace }}/x86-64
+
           # add feed
           echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
           
