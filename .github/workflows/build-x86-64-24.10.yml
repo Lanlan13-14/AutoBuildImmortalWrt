@@ -36,15 +36,26 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout code with submodules
+      - name: Checkout OpenWrt code with submodules
         uses: actions/checkout@v3
         with:
-          submodules: 'true'  # 确保获取 OpenWrt 源码的所有子模块
+          submodules: 'recursive'  # 确保获取 OpenWrt 仓库的子模块
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git
+
+      - name: Clone OpenWrt source repository
+        run: |
+          git clone --depth 1 https://github.com/openwrt/openwrt.git ${{ github.workspace }}/x86-64
+          cd ${{ github.workspace }}/x86-64
+          git submodule update --init --recursive  # 确保拉取所有子模块
+
+      - name: List directory contents
+        run: |
+          cd ${{ github.workspace }}/x86-64
+          ls -al  # 查看文件夹内容，确保scripts目录存在
 
       - name: Validate PPPoE Inputs
         run: |
@@ -54,11 +65,6 @@ jobs:
               exit 1
             fi
           fi
-
-      - name: Check OpenWrt source directory structure
-        run: |
-          cd ${{ github.workspace }}/x86-64
-          ls -al ./scripts
 
       - name: Compilation Step
         run: |
